@@ -1,0 +1,8 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf:
+    version: ">=6.1.0"
+  espressif/usb_host_uvc:
+    version: "*"
+  espressif/usb:
+    version: "*"
