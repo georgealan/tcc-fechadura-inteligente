@@ -13,7 +13,13 @@
 
 #define EXAMPLE_USB_HOST_PRIORITY   (15)
 #define EXAMPLE_FRAME_COUNT         (2)
+#define JPG_MIN_SIZE                (40 * 1024)
+#define JPG_COMPRESSION_RATIO       (6)
+#define UVC_ESTIMATE_JPG_SIZE_B(width, height, bpp) \
+    (max(((width) * (height) * (bpp) / 8) / JPG_COMPRESSION_RATIO, JPG_MIN_SIZE))
 #define UVC_DESC_DWFRAMEINTERVAL_TO_FPS(dwFrameInterval) (((dwFrameInterval) != 0) ? 10000000 / ((float)(dwFrameInterval)) : 0)
+
+#define max(a, b) ((a) > (b) ? (a) : (b))
 
 static const char *TAG = "CAMERA_USB";
 static QueueHandle_t rx_frames_queue;
@@ -34,7 +40,11 @@ bool frame_callback(const uvc_host_frame_t *frame, void *user_ctx) {
 
 // Callback 2: Eventos da stream (erros, desconexões)
 static void stream_callback(const uvc_host_stream_event_data_t *event, void *user_ctx) {
-    if (event->type == UVC_HOST_DEVICE_DISCONNECTED) {
+    if (event->type == UVC_HOST_TRANSFER_ERROR) {
+        ESP_LOGE(TAG, "Erro de transferencia USB: %d", event->transfer_error.error);
+    } else if (event->type == UVC_HOST_FRAME_BUFFER_OVERFLOW) {
+        ESP_LOGW(TAG, "Buffer de frame insuficiente; aumente frame_size");
+    } else if (event->type == UVC_HOST_DEVICE_DISCONNECTED) {
         ESP_LOGI(TAG, "Câmera desconectada subitamente!");
         dev_connected = false;
         uvc_host_stream_close(event->device_disconnected.stream_hdl);
@@ -96,8 +106,8 @@ static void uvc_event_cb(const uvc_host_driver_event_data_t *event, void *user_c
             },
             .advanced = {
                 .number_of_frame_buffers = EXAMPLE_FRAME_COUNT,
-                // Aumente a memória máxima alocada para caber a imagem HD
-                .frame_size = 480 * 320 * 2, // Tamanho máximo estimado, aumente o cálculo aqui
+                // MJPEG usa buffers para a imagem comprimida, não para RGB/YUV bruto.
+                .frame_size = UVC_ESTIMATE_JPG_SIZE_B(480, 320, 16),
                 .number_of_urbs = 4,
                 .urb_size = 10 * 1024,
             },
@@ -128,7 +138,7 @@ void app_main(void) {
     // 1. Instala o Driver Base USB
     const usb_host_config_t host_config = {
         .skip_phy_setup = false,
-        .intr_flags = ESP_INTR_FLAG_LOWMED, // Note que a flag correta no v6.1 é LOWMED, não LEVEL1
+        .intr_flags = ESP_INTR_FLAG_LEVEL1,
     };
     ESP_ERROR_CHECK(usb_host_install(&host_config));
 
@@ -137,7 +147,7 @@ void app_main(void) {
 
     // 2. Instala o Driver UVC (Câmera)
     const uvc_host_driver_config_t uvc_driver_config = {
-        .driver_task_stack_size = 4 * 1024,
+        .driver_task_stack_size = 8 * 1024,
         .driver_task_priority = EXAMPLE_USB_HOST_PRIORITY + 1,
         .xCoreID = tskNO_AFFINITY,
         .create_background_task = true,
@@ -146,4 +156,9 @@ void app_main(void) {
     ESP_ERROR_CHECK(uvc_host_install(&uvc_driver_config));
 
     ESP_LOGI(TAG, "Sistema pronto. Aguardando conexao da camera OTG...");
+
+    // Mantém a função principal viva eternamente
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
