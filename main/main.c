@@ -1,3 +1,5 @@
+#include "i2c_bus.h"
+#include "sensor_tof.h"
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -159,6 +161,8 @@ void app_main(void) {
     ESP_LOGI(TAG, "Sistema pronto. Aguardando conexao da camera OTG...");
 
     teclado_iniciar();
+    ESP_ERROR_CHECK(i2c_bus_iniciar());
+    sensor_tof_iniciar();
 
     // Mantém a função principal viva eternamente
     while (1) {
