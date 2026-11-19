@@ -22,11 +22,9 @@ static const char *TAG = "VL53L1X";
 #define VL53L1X_REG_MODEL_ID              0x010F
 #define VL53L1X_REG_MODULE_TYPE           0x0110
 
-// Limite de aproximacao para despertar a fechadura (60 cm)
 #define DISTANCIA_TRIGGER_MM              600
 #define I2C_TIMEOUT_MS                    100
 
-// Tabela oficial ST ULD (registradores 0x002D a 0x0087 — modo longo, ~100 ms)
 static const uint8_t VL53L1X_DEFAULT_CONFIG[91] = {
     0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x02, 0x08, 0x00, 0x08,
     0x10, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0xFF, 0x00, 0x0F,
@@ -43,15 +41,22 @@ static const uint8_t VL53L1X_DEFAULT_CONFIG[91] = {
 static i2c_master_dev_handle_t s_tof_dev = NULL;
 
 static esp_err_t tof_write_byte(uint16_t reg, uint8_t val) {
+    if (!i2c_bus_lock(200)) return ESP_ERR_TIMEOUT;
     uint8_t buf[3] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val };
-    return i2c_master_transmit(s_tof_dev, buf, sizeof(buf), I2C_TIMEOUT_MS);
+    esp_err_t err = i2c_master_transmit(s_tof_dev, buf, sizeof(buf), I2C_TIMEOUT_MS);
+    i2c_bus_unlock();
+    return err;
 }
 
 static esp_err_t tof_read_byte(uint16_t reg, uint8_t *val) {
+    if (!i2c_bus_lock(200)) return ESP_ERR_TIMEOUT;
     uint8_t reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
     esp_err_t err = i2c_master_transmit(s_tof_dev, reg_buf, sizeof(reg_buf), I2C_TIMEOUT_MS);
-    if (err != ESP_OK) return err;
-    return i2c_master_receive(s_tof_dev, val, 1, I2C_TIMEOUT_MS);
+    if (err == ESP_OK) {
+        err = i2c_master_receive(s_tof_dev, val, 1, I2C_TIMEOUT_MS);
+    }
+    i2c_bus_unlock();
+    return err;
 }
 
 static esp_err_t tof_read_word(uint16_t reg, uint16_t *val) {
@@ -74,7 +79,6 @@ static bool tof_dado_pronto(void) {
 }
 
 static esp_err_t tof_inicializar_chip(void) {
-    // 1. Aguarda o boot interno do sensor
     uint8_t boot_status = 0;
     for (int i = 0; i < 50; i++) {
         if (tof_read_byte(VL53L1X_REG_FIRMWARE_STATUS, &boot_status) == ESP_OK && (boot_status & 0x01)) {
@@ -87,7 +91,6 @@ static esp_err_t tof_inicializar_chip(void) {
         return ESP_ERR_TIMEOUT;
     }
 
-    // 2. Confirma Model ID (0xEA) e Module Type (0xCC)
     uint8_t model_id = 0, mod_type = 0;
     esp_err_t err = tof_read_byte(VL53L1X_REG_MODEL_ID, &model_id);
     if (err != ESP_OK) return err;
@@ -95,7 +98,6 @@ static esp_err_t tof_inicializar_chip(void) {
     if (err != ESP_OK) return err;
     ESP_LOGI(TAG, "VL53L1X identificado! ID = 0x%02X%02X", model_id, mod_type);
 
-    // 3. Carrega os 91 bytes da configuracao padrao ST (0x002D .. 0x0087)
     for (uint16_t i = 0; i < sizeof(VL53L1X_DEFAULT_CONFIG); i++) {
         err = tof_write_byte(0x002D + i, VL53L1X_DEFAULT_CONFIG[i]);
         if (err != ESP_OK) {
@@ -104,7 +106,6 @@ static esp_err_t tof_inicializar_chip(void) {
         }
     }
 
-    // 4. Ciclo inicial de calibracao VHV
     err = tof_write_byte(VL53L1X_REG_SYSTEM_MODE_START, 0x40);
     if (err != ESP_OK) return err;
 
@@ -116,22 +117,15 @@ static esp_err_t tof_inicializar_chip(void) {
     tof_write_byte(VL53L1X_REG_VHV_LOOP_BOUND, 0x09);
     tof_write_byte(VL53L1X_REG_VHV_INIT, 0x00);
 
-    // 5. Inicia medicao continua
     return tof_write_byte(VL53L1X_REG_SYSTEM_MODE_START, 0x40);
 }
 
 static void sensor_tof_task(void *arg) {
-    vTaskDelay(pdMS_TO_TICKS(150));
+    vTaskDelay(pdMS_TO_TICKS(50));
 
     i2c_master_bus_handle_t bus = i2c_bus_obter_handle();
     if (bus == NULL) {
         ESP_LOGE(TAG, "Barramento I2C nao inicializado!");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    if (i2c_master_probe(bus, VL53L1X_I2C_ADDR, I2C_TIMEOUT_MS) != ESP_OK) {
-        ESP_LOGE(TAG, "VL53L1X nao respondeu em 0x29.");
         vTaskDelete(NULL);
         return;
     }
@@ -142,9 +136,18 @@ static void sensor_tof_task(void *arg) {
         .scl_speed_hz = 50000,
     };
 
-    esp_err_t err = i2c_master_bus_add_device(bus, &dev_cfg, &s_tof_dev);
+    esp_err_t err = ESP_ERR_TIMEOUT;
+    if (i2c_bus_lock(300)) {
+        if (i2c_master_probe(bus, VL53L1X_I2C_ADDR, I2C_TIMEOUT_MS) == ESP_OK) {
+            err = i2c_master_bus_add_device(bus, &dev_cfg, &s_tof_dev);
+        } else {
+            err = ESP_ERR_NOT_FOUND;
+        }
+        i2c_bus_unlock();
+    }
+
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Erro ao registrar VL53L1X no I2C: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "VL53L1X nao respondeu em 0x29 (%s).", esp_err_to_name(err));
         vTaskDelete(NULL);
         return;
     }
@@ -156,7 +159,7 @@ static void sensor_tof_task(void *arg) {
         return;
     }
 
-    ESP_LOGI(TAG, "VL53L1X medindo! Aproxime a mao (< %d mm dispara alerta de presenca).", DISTANCIA_TRIGGER_MM);
+    ESP_LOGI(TAG, "VL53L1X medindo! (trigger < %d mm)", DISTANCIA_TRIGGER_MM);
 
     int contador_log = 0;
 
@@ -169,7 +172,7 @@ static void sensor_tof_task(void *arg) {
             esp_err_t e2 = tof_read_word(VL53L1X_REG_RESULT_DISTANCE_MM, &dist_mm);
             tof_write_byte(VL53L1X_REG_SYSTEM_INT_CLEAR, 0x01);
 
-            if (e1 == ESP_OK && e2 == ESP_OK && ++contador_log >= 3) {
+            if (e1 == ESP_OK && e2 == ESP_OK && ++contador_log >= 5) {
                 contador_log = 0;
                 uint8_t range_status = status_raw & 0x1F;
 
@@ -184,7 +187,7 @@ static void sensor_tof_task(void *arg) {
                 }
             }
         }
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
 
