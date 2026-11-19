@@ -7,6 +7,7 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "teclado.h"
 
 #include "usb/usb_host.h"
 #include "usb/uvc_host.h"
@@ -156,6 +157,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(uvc_host_install(&uvc_driver_config));
 
     ESP_LOGI(TAG, "Sistema pronto. Aguardando conexao da camera OTG...");
+
+    teclado_iniciar();
 
     // Mantém a função principal viva eternamente
     while (1) {
