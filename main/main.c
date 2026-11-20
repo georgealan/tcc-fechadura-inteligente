@@ -2,6 +2,7 @@
 #include "sensor_tof.h"
 #include "sensor_mpu.h"
 #include "display_tft.h"
+#include "olho_magico.h"
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -33,7 +34,8 @@ static bool dev_connected = false;
 // Callback 1: Chamado para cada frame (imagem) recebido
 bool frame_callback(const uvc_host_frame_t *frame, void *user_ctx) {
     QueueHandle_t frame_q = *((QueueHandle_t *)user_ctx);
-    ESP_LOGI(TAG, "Frame recebido! Tamanho: %d bytes", frame->data_len);
+    //ESP_LOGI(TAG, "Frame recebido! Tamanho: %d bytes", frame->data_len);
+    olho_magico_enviar_frame(frame->data, frame->data_len);
 
     // Passa o frame para a Queue sem bloquear o USB
     BaseType_t result = xQueueSendToBack(frame_q, &frame, 0);
@@ -167,6 +169,7 @@ void app_main(void) {
     sensor_tof_iniciar();
     sensor_mpu_iniciar();
     display_tft_iniciar();
+    olho_magico_iniciar();
 
     // Mantém a função principal viva eternamente
     while (1) {

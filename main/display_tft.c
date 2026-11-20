@@ -3,22 +3,24 @@
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_heap_caps.h"
-#include "esp_timer.h"
 #include "esp_log.h"
 
 static const char *TAG = "TFT_ST7796";
 
-// 20 MHz e estavel em protoboard; na placa final pode subir para 40 MHz
+// 20 MHz validado na protoboard (~16 FPS em 320x240); pode subir para 30-40 MHz com fios curtos
 #define TFT_SPI_CLOCK_HZ     (20 * 1000 * 1000)
 #define TFT_LINHAS_DMA       20
 #define TFT_BUF_PIXELS       (TFT_LARGURA * TFT_LINHAS_DMA)
 
 static spi_device_handle_t s_spi_tft = NULL;
+static SemaphoreHandle_t s_tft_mutex = NULL;
 static uint16_t *s_dma_buf = NULL;
+static volatile bool s_layout_pronto = false;
 
 static inline uint16_t swap16(uint16_t v) {
     return (uint16_t)((v >> 8) | (v << 8));
@@ -67,7 +69,6 @@ static void tft_definir_janela(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y
 }
 
 static void st7796s_inicializar_registradores(void) {
-    // Reset fisico
     gpio_set_level(PIN_TFT_RST, 0);
     vTaskDelay(pdMS_TO_TICKS(20));
     gpio_set_level(PIN_TFT_RST, 1);
@@ -79,17 +80,14 @@ static void st7796s_inicializar_registradores(void) {
     tft_enviar_cmd(0x11); // Sleep Out
     vTaskDelay(pdMS_TO_TICKS(120));
 
-    // Destrava comandos estendidos do ST7796S
     tft_enviar_cmd(0xF0); tft_enviar_dado_u8(0xC3);
     tft_enviar_cmd(0xF0); tft_enviar_dado_u8(0x96);
 
-    // Orientacao retrato (320x480) + ordem BGR
+    // Orientacao retrato com pinos embaixo (0x88) + BGR validado
     tft_enviar_cmd(0x36); tft_enviar_dado_u8(0x88);
-
-    // Formato de cor: 16-bit RGB565
+    // RGB565 (16 bits)
     tft_enviar_cmd(0x3A); tft_enviar_dado_u8(0x55);
 
-    // Controle de inversao e saida do painel
     tft_enviar_cmd(0xB4); tft_enviar_dado_u8(0x01);
 
     const uint8_t b6_data[] = { 0x80, 0x02, 0x3B };
@@ -114,13 +112,11 @@ static void st7796s_inicializar_registradores(void) {
     };
     tft_enviar_cmd(0xE1); tft_enviar_dados(gamma_neg, sizeof(gamma_neg));
 
-    // Trava comandos estendidos
     tft_enviar_cmd(0xF0); tft_enviar_dado_u8(0x3C);
     tft_enviar_cmd(0xF0); tft_enviar_dado_u8(0x69);
 
-    // Painel IPS normalmente requer INVON (0x21). Se as cores ficarem negativas, troque para 0x20.
+    // INVOFF (0x20) validado para esse painel
     tft_enviar_cmd(0x20);
-
     tft_enviar_cmd(0x29); // Display ON
     vTaskDelay(pdMS_TO_TICKS(50));
 }
@@ -129,11 +125,17 @@ void display_tft_backlight(bool ligado) {
     gpio_set_level(PIN_TFT_BL, ligado ? 1 : 0);
 }
 
+bool display_tft_pronto(void) {
+    return s_layout_pronto;
+}
+
 void display_tft_preencher_retangulo(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t cor_rgb565) {
-    if (s_spi_tft == NULL || s_dma_buf == NULL || w == 0 || h == 0) return;
+    if (s_spi_tft == NULL || s_dma_buf == NULL || s_tft_mutex == NULL || w == 0 || h == 0) return;
     if (x >= TFT_LARGURA || y >= TFT_ALTURA) return;
     if (x + w > TFT_LARGURA) w = TFT_LARGURA - x;
     if (y + h > TFT_ALTURA) h = TFT_ALTURA - y;
+
+    if (xSemaphoreTake(s_tft_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
 
     uint16_t cor_be = swap16(cor_rgb565);
     size_t total_pixels = (size_t)w * (size_t)h;
@@ -156,11 +158,17 @@ void display_tft_preencher_retangulo(uint16_t x, uint16_t y, uint16_t w, uint16_
         spi_device_polling_transmit(s_spi_tft, &t);
         restantes -= enviar;
     }
+
+    xSemaphoreGive(s_tft_mutex);
 }
 
 void display_tft_desenhar_rgb565(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *pixels, bool inverter_bytes) {
-    if (s_spi_tft == NULL || s_dma_buf == NULL || pixels == NULL || w == 0 || h == 0) return;
+    if (s_spi_tft == NULL || s_dma_buf == NULL || s_tft_mutex == NULL || pixels == NULL || w == 0 || h == 0) return;
     if (x >= TFT_LARGURA || y >= TFT_ALTURA) return;
+    if (x + w > TFT_LARGURA) w = TFT_LARGURA - x;
+    if (y + h > TFT_ALTURA) h = TFT_ALTURA - y;
+
+    if (xSemaphoreTake(s_tft_mutex, pdMS_TO_TICKS(200)) != pdTRUE) return;
 
     tft_definir_janela(x, y, x + w - 1, y + h - 1);
     gpio_set_level(PIN_TFT_DC, 1);
@@ -187,52 +195,31 @@ void display_tft_desenhar_rgb565(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
         spi_device_polling_transmit(s_spi_tft, &t);
         offset += enviar;
     }
+
+    xSemaphoreGive(s_tft_mutex);
 }
 
-static void tft_teste_visual_task(void *arg) {
-    // 1. Teste RGB de cores + medicao real de FPS para o Olho Magico
-    int64_t t0 = esp_timer_get_time();
-    display_tft_preencher_retangulo(0, 0, TFT_LARGURA, TFT_ALTURA, COR_VERMELHO);
-    int64_t t1 = esp_timer_get_time();
-
-    float ms_tela_cheia = (t1 - t0) / 1000.0f;
-    float fps_tela_cheia = 1000.0f / ms_tela_cheia;
-    float fps_olho_magico_qvga = fps_tela_cheia * 2.0f; // 320x240 e metade da tela 320x480
-
-    ESP_LOGI(TAG, "Benchmark SPI @ %d MHz -> Tela cheia (320x480): %.1f ms (%.1f FPS) | Janela Olho Magico (320x240): ~%.1f FPS",
-             TFT_SPI_CLOCK_HZ / 1000000, ms_tela_cheia, fps_tela_cheia, fps_olho_magico_qvga);
-
-    vTaskDelay(pdMS_TO_TICKS(700));
-    display_tft_preencher_retangulo(0, 0, TFT_LARGURA, TFT_ALTURA, COR_VERDE);
-    vTaskDelay(pdMS_TO_TICKS(700));
-    display_tft_preencher_retangulo(0, 0, TFT_LARGURA, TFT_ALTURA, COR_AZUL);
-    vTaskDelay(pdMS_TO_TICKS(700));
-
-    // 2. Layout de simulacao do Olho Magico Digital (320x240 em cima + painel de status embaixo)
+static void desenhar_layout_base(void) {
     display_tft_preencher_retangulo(0, 0, TFT_LARGURA, TFT_ALTURA, COR_PRETO);
 
-    // Barra superior de titulo (altura 40 px)
+    // Barra superior de titulo
     display_tft_preencher_retangulo(0, 0, TFT_LARGURA, 40, COR_AZUL);
 
-    // Janela do Olho Magico 320x240 (y = 50 ate 290)
+    // Linhas verdes superior e inferior emoldurando a janela 320x240 (y = 50..289)
+    display_tft_preencher_retangulo(0, 46, TFT_LARGURA, 4, COR_VERDE);
     display_tft_preencher_retangulo(0, 50, 320, 240, COR_CINZA_ESC);
-    // Moldura verde simulando "Camera Ativa"
-    display_tft_preencher_retangulo(0, 50, 320, 4, COR_VERDE);
-    display_tft_preencher_retangulo(0, 286, 320, 4, COR_VERDE);
-    display_tft_preencher_retangulo(0, 50, 4, 240, COR_VERDE);
-    display_tft_preencher_retangulo(316, 50, 4, 240, COR_VERDE);
+    display_tft_preencher_retangulo(0, 290, TFT_LARGURA, 4, COR_VERDE);
 
-    // Cards inferiores de status (Porta / Presenca / Alarme)
+    // Cards inferiores de status
     display_tft_preencher_retangulo(15, 310, 290, 65, COR_VERDE);
     display_tft_preencher_retangulo(15, 390, 138, 70, COR_CIANO);
     display_tft_preencher_retangulo(167, 390, 138, 70, COR_AMARELO);
-
-    ESP_LOGI(TAG, "Display ST7796S validado com layout do Olho Magico!");
-    vTaskDelete(NULL);
 }
 
 esp_err_t display_tft_iniciar(void) {
-    // Configura GPIOs de controle (DC, RST, BL)
+    s_tft_mutex = xSemaphoreCreateMutex();
+    if (s_tft_mutex == NULL) return ESP_ERR_NO_MEM;
+
     gpio_config_t io_cfg = {
         .pin_bit_mask = (1ULL << PIN_TFT_DC) | (1ULL << PIN_TFT_RST) | (1ULL << PIN_TFT_BL),
         .mode = GPIO_MODE_OUTPUT,
@@ -245,14 +232,12 @@ esp_err_t display_tft_iniciar(void) {
 
     display_tft_backlight(false);
 
-    // Aloca buffer DMA para transferencias rapidas
     s_dma_buf = heap_caps_malloc(TFT_BUF_PIXELS * sizeof(uint16_t), MALLOC_CAP_DMA);
     if (s_dma_buf == NULL) {
         ESP_LOGE(TAG, "Falha ao alocar buffer DMA do TFT!");
         return ESP_ERR_NO_MEM;
     }
 
-    // Inicializa barramento SPI2 (somente escrita: MISO = -1)
     spi_bus_config_t bus_cfg = {
         .mosi_io_num = PIN_TFT_MOSI,
         .miso_io_num = -1,
@@ -263,10 +248,7 @@ esp_err_t display_tft_iniciar(void) {
     };
 
     err = spi_bus_initialize(SPI2_HOST, &bus_cfg, SPI_DMA_CH_AUTO);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao iniciar SPI2: %s", esp_err_to_name(err));
-        return err;
-    }
+    if (err != ESP_OK) return err;
 
     spi_device_interface_config_t dev_cfg = {
         .clock_speed_hz = TFT_SPI_CLOCK_HZ,
@@ -276,18 +258,14 @@ esp_err_t display_tft_iniciar(void) {
     };
 
     err = spi_bus_add_device(SPI2_HOST, &dev_cfg, &s_spi_tft);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Falha ao adicionar ST7796S no SPI2: %s", esp_err_to_name(err));
-        return err;
-    }
+    if (err != ESP_OK) return err;
 
     st7796s_inicializar_registradores();
+    desenhar_layout_base();
     display_tft_backlight(true);
+    s_layout_pronto = true;
 
-    ESP_LOGI(TAG, "ST7796S iniciado (SCK=GPIO%d, MOSI=GPIO%d, CS=GPIO%d, DC=GPIO%d, RST=GPIO%d, BL=GPIO%d)",
-             PIN_TFT_SCK, PIN_TFT_MOSI, PIN_TFT_CS, PIN_TFT_DC, PIN_TFT_RST, PIN_TFT_BL);
-
-    xTaskCreatePinnedToCore(tft_teste_visual_task, "tft_teste_task", 4096, NULL, 4, NULL, tskNO_AFFINITY);
+    ESP_LOGI(TAG, "ST7796S pronto para Olho Magico (janela 320x240 em y=50)");
     return ESP_OK;
 }
 // FIM DO ARQUIVO
