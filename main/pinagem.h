@@ -30,13 +30,12 @@
 #define PIN_I2S_BCLK        GPIO_NUM_16
 #define PIN_I2S_DIN         GPIO_NUM_17
 
-// --- Display TFT SPI ---
+// --- Display TFT SPI (ST7796S 3.5" 320x480 IPS) ---
 #define PIN_TFT_DC          GPIO_NUM_8
 #define PIN_TFT_RST         GPIO_NUM_9
 #define PIN_TFT_BL          GPIO_NUM_10
 #define PIN_TFT_CS          GPIO_NUM_11
 #define PIN_TFT_MOSI        GPIO_NUM_12
-#define PIN_TFT_MISO        GPIO_NUM_13
 #define PIN_TFT_SCK         GPIO_NUM_14
 
 #endif // PINAGEM_H

@@ -1,6 +1,7 @@
 #include "i2c_bus.h"
 #include "sensor_tof.h"
 #include "sensor_mpu.h"
+#include "display_tft.h"
 #include <stdio.h>
 #include <string.h>
 #include <inttypes.h>
@@ -165,6 +166,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(i2c_bus_iniciar());
     sensor_tof_iniciar();
     sensor_mpu_iniciar();
+    display_tft_iniciar();
 
     // Mantém a função principal viva eternamente
     while (1) {
