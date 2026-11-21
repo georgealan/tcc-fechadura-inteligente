@@ -1,6 +1,7 @@
 #ifndef AUDIO_I2S_H
 #define AUDIO_I2S_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -16,8 +17,12 @@ typedef enum {
 // Inicializa o barramento I2S (MAX98357A) e a task de reproducao
 esp_err_t audio_i2s_iniciar(void);
 
-// Enfileira um efeito sonoro para tocar sem bloquear quem chamou
+// Enfileira um efeito sonoro sintetizado sem bloquear quem chamou
 void audio_i2s_tocar(audio_efeito_t efeito);
+
+// Enfileira um arquivo WAV (PCM 16-bit, Mono ou Estereo) em Flash ou PSRAM
+// Obs.: o ponteiro 'dados' precisa permanecer valido ate o fim da reproducao
+void audio_i2s_tocar_wav(const uint8_t *dados, size_t tamanho);
 
 // Ajusta o volume de software (0 a 100%)
 void audio_i2s_definir_volume(uint8_t volume_pct);

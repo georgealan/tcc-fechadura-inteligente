@@ -26,9 +26,9 @@
 #define PIN_SENSOR_PORTA    GPIO_NUM_18
 
 // --- Áudio I2S (MAX98357A) ---
-#define PIN_I2S_LRC         GPIO_NUM_15
+#define PIN_I2S_LRC         GPIO_NUM_17
 #define PIN_I2S_BCLK        GPIO_NUM_16
-#define PIN_I2S_DIN         GPIO_NUM_17
+#define PIN_I2S_DIN         GPIO_NUM_15
 
 // --- Display TFT SPI (ST7796S 3.5" 320x480 IPS) ---
 #define PIN_TFT_DC          GPIO_NUM_8

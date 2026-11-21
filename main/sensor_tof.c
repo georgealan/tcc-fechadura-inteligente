@@ -1,10 +1,12 @@
 #include "sensor_tof.h"
 #include "i2c_bus.h"
+#include "fechadura_fsm.h"
 
 #include <stdint.h>
 #include <stdbool.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 
 static const char *TAG = "VL53L1X";
@@ -22,7 +24,11 @@ static const char *TAG = "VL53L1X";
 #define VL53L1X_REG_MODEL_ID              0x010F
 #define VL53L1X_REG_MODULE_TYPE           0x0110
 
-#define DISTANCIA_TRIGGER_MM              600
+#define DISTANCIA_TRIGGER_MM              600   // Ativa visitante em <= 60 cm
+#define DISTANCIA_LIBERACAO_MM            620   // Libera logo acima de 62 cm
+#define DISTANCIA_MIN_VALIDA_MM           20    // Descarta leituras espurias de 0 mm
+#define TIMEOUT_SEM_DADO_MS               1500  // Protecao contra travamento por pico do rele
+#define COOLDOWN_EVENTO_PRESENCA_MS       2500
 #define I2C_TIMEOUT_MS                    100
 
 static const uint8_t VL53L1X_DEFAULT_CONFIG[91] = {
@@ -39,6 +45,23 @@ static const uint8_t VL53L1X_DEFAULT_CONFIG[91] = {
 };
 
 static i2c_master_dev_handle_t s_tof_dev = NULL;
+
+static portMUX_TYPE s_tof_mux = portMUX_INITIALIZER_UNLOCKED;
+static uint16_t s_ultima_dist_mm = 0;
+static bool s_leitura_valida = false;
+static bool s_presenca_ativa = false;
+
+bool sensor_tof_obter_leitura(uint16_t *dist_mm, bool *presenca_ativa) {
+    portENTER_CRITICAL(&s_tof_mux);
+    bool valida = s_leitura_valida;
+    uint16_t dist = s_ultima_dist_mm;
+    bool presenca = s_presenca_ativa;
+    portEXIT_CRITICAL(&s_tof_mux);
+
+    if (dist_mm != NULL) *dist_mm = dist;
+    if (presenca_ativa != NULL) *presenca_ativa = presenca;
+    return valida;
+}
 
 static esp_err_t tof_write_byte(uint16_t reg, uint8_t val) {
     if (!i2c_bus_lock(200)) return ESP_ERR_TIMEOUT;
@@ -130,7 +153,15 @@ static esp_err_t tof_inicializar_chip(void) {
     return tof_write_byte(VL53L1X_REG_SYSTEM_MODE_START, 0x40);
 }
 
+static uint16_t mediana_3(uint16_t a, uint16_t b, uint16_t c) {
+    if (a > b) { uint16_t t = a; a = b; b = t; }
+    if (b > c) { uint16_t t = b; b = c; c = t; }
+    if (a > b) { uint16_t t = a; a = b; b = t; }
+    return b;
+}
+
 static void sensor_tof_task(void *arg) {
+    (void)arg;
     vTaskDelay(pdMS_TO_TICKS(50));
 
     i2c_master_bus_handle_t bus = i2c_bus_obter_handle();
@@ -169,11 +200,19 @@ static void sensor_tof_task(void *arg) {
         return;
     }
 
-    ESP_LOGI(TAG, "VL53L1X medindo! (trigger < %d mm)", DISTANCIA_TRIGGER_MM);
+    ESP_LOGI(TAG, "VL53L1X medindo! (trigger <= %d mm, libera >= %d mm)",
+             DISTANCIA_TRIGGER_MM, DISTANCIA_LIBERACAO_MM);
 
     int contador_log = 0;
+    bool presenca_local = false;
+    uint16_t janela[3] = { 0xFFFF, 0xFFFF, 0xFFFF };
+    int idx_janela = 0;
+    int64_t ultimo_evento_us = 0;
+    int64_t ultimo_dado_ok_us = esp_timer_get_time();
 
     while (1) {
+        int64_t agora_us = esp_timer_get_time();
+
         if (tof_dado_pronto()) {
             uint8_t status_raw = 0;
             uint16_t dist_mm = 0;
@@ -182,21 +221,65 @@ static void sensor_tof_task(void *arg) {
             esp_err_t e2 = tof_read_word(VL53L1X_REG_RESULT_DISTANCE_MM, &dist_mm);
             tof_write_byte(VL53L1X_REG_SYSTEM_INT_CLEAR, 0x01);
 
-            if (e1 == ESP_OK && e2 == ESP_OK && ++contador_log >= 5) {
-                contador_log = 0;
+            if (e1 == ESP_OK && e2 == ESP_OK) {
+                ultimo_dado_ok_us = agora_us;
                 uint8_t range_status = status_raw & 0x1F;
 
-                if (range_status == 9) {
-                    if (dist_mm <= DISTANCIA_TRIGGER_MM) {
-                        ESP_LOGW(TAG, ">>> PRESENCA NA PORTA! Distancia: %u mm (%.1f cm)", dist_mm, dist_mm / 10.0f);
-                    } else {
-                        ESP_LOGI(TAG, "Distancia: %u mm (%.1f cm)", dist_mm, dist_mm / 10.0f);
+                // Se fora de alcance ou ruido perto de 0 mm, trata como infinito (0xFFFF)
+                bool amostra_valida = (range_status == 9 && dist_mm >= DISTANCIA_MIN_VALIDA_MM);
+                janela[idx_janela] = amostra_valida ? dist_mm : 0xFFFF;
+                idx_janela = (idx_janela + 1) % 3;
+
+                uint16_t dist_filtrada = mediana_3(janela[0], janela[1], janela[2]);
+                bool filtrada_valida = (dist_filtrada != 0xFFFF);
+
+                if (filtrada_valida && dist_filtrada <= DISTANCIA_TRIGGER_MM) {
+                    if (!presenca_local || ((agora_us - ultimo_evento_us) / 1000) >= COOLDOWN_EVENTO_PRESENCA_MS) {
+                        ultimo_evento_us = agora_us;
+                        fechadura_fsm_enviar_evento(EVT_PRESENCA_DETECTADA, 0);
                     }
-                } else {
-                    ESP_LOGI(TAG, "Fora de alcance / leitura invalida (status=%u, bruto=%u mm)", range_status, dist_mm);
+                    presenca_local = true;
+                } else if (!filtrada_valida || dist_filtrada >= DISTANCIA_LIBERACAO_MM) {
+                    presenca_local = false;
+                }
+
+                portENTER_CRITICAL(&s_tof_mux);
+                s_leitura_valida = filtrada_valida;
+                s_ultima_dist_mm = filtrada_valida ? dist_filtrada : 0;
+                s_presenca_ativa = presenca_local;
+                portEXIT_CRITICAL(&s_tof_mux);
+
+                if (++contador_log >= 10) {
+                    contador_log = 0;
+                    if (filtrada_valida) {
+                        if (presenca_local) {
+                            ESP_LOGW(TAG, ">>> PRESENCA NA PORTA! Distancia: %u mm (%.1f cm)",
+                                     dist_filtrada, dist_filtrada / 10.0f);
+                        } else {
+                            ESP_LOGI(TAG, "Distancia: %u mm (%.1f cm)",
+                                     dist_filtrada, dist_filtrada / 10.0f);
+                        }
+                    } else {
+                        ESP_LOGI(TAG, "Area livre / fora de alcance (status=%u)", range_status);
+                    }
                 }
             }
+        } else if (((agora_us - ultimo_dado_ok_us) / 1000) >= TIMEOUT_SEM_DADO_MS) {
+            ESP_LOGW(TAG, "VL53L1X sem novos dados ha >%d ms. Reinicializando...", TIMEOUT_SEM_DADO_MS);
+            janela[0] = janela[1] = janela[2] = 0xFFFF;
+            presenca_local = false;
+
+            portENTER_CRITICAL(&s_tof_mux);
+            s_leitura_valida = false;
+            s_ultima_dist_mm = 0;
+            s_presenca_ativa = false;
+            portEXIT_CRITICAL(&s_tof_mux);
+
+            tof_write_byte(VL53L1X_REG_SYSTEM_INT_CLEAR, 0x01);
+            tof_inicializar_chip();
+            ultimo_dado_ok_us = esp_timer_get_time();
         }
+
         vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
@@ -204,3 +287,4 @@ static void sensor_tof_task(void *arg) {
 void sensor_tof_iniciar(void) {
     xTaskCreatePinnedToCore(sensor_tof_task, "sensor_tof_task", 4096, NULL, 5, NULL, tskNO_AFFINITY);
 }
+// FIM DO ARQUIVO

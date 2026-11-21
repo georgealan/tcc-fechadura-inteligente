@@ -1,5 +1,6 @@
 #include "sensor_mpu.h"
 #include "i2c_bus.h"
+#include "fechadura_fsm.h"
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -128,6 +129,9 @@ static void sensor_mpu_task(void *arg) {
     ESP_LOGI(TAG, "MPU-6050 pronto! Incline o modulo ou de leves batidas na mesa para testar.");
 
     int contador_log = 0;
+    bool ref_calibrada = false;
+    float ref_x = 0.0f, ref_y = 0.0f, ref_z = 1.0f;
+    int contagem_inclinacao = 0;
 
     while (1) {
         uint8_t raw[14] = {0};
@@ -149,30 +153,69 @@ static void sensor_mpu_task(void *arg) {
             float gz = gz_raw / GYRO_LSB_POR_DPS;
 
             float temp_c = (tp_raw / 340.0f) + 36.53f;
-
             float accel_total = sqrtf(ax * ax + ay * ay + az * az);
             float delta_g = fabsf(accel_total - 1.0f);
 
-            // Descarta quadros corrompidos por ruido I2C:
-            // - Giroscopio zerado exatamente nos 3 eixos
-            // - Aceleracao total < 0.35g (leitura corrompida com eixo Z zerado)
+            // Descarta quadros corrompidos por ruido I2C
             if ((gx_raw == 0 && gy_raw == 0 && gz_raw == 0) || (accel_total < 0.35f)) {
                 vTaskDelay(pdMS_TO_TICKS(20));
                 continue;
             }
 
-            if (delta_g >= LIMIAR_IMPACTO_G) {
-                ESP_LOGW(TAG, ">>> IMPACTO / VIBRACAO DETECTADA! Pico: %.2fg (delta=%.2fg)", accel_total, delta_g);
-                vTaskDelay(pdMS_TO_TICKS(250));
+            // Se a porta foi aberta de forma autorizada ou esta estabilizando, pausa o alarme
+            if (!fechadura_fsm_alarme_armado()) {
+                ref_calibrada = false;
+                contagem_inclinacao = 0;
+            } else {
+                // Vetor unitario da gravidade atual
+                float nx = ax / accel_total;
+                float ny = ay / accel_total;
+                float nz = az / accel_total;
+
+                // Auto-calibra a posicao de repouso assim que a fechadura arma
+                if (!ref_calibrada && delta_g < 0.15f) {
+                    ref_x = nx;
+                    ref_y = ny;
+                    ref_z = nz;
+                    ref_calibrada = true;
+                    ESP_LOGI(TAG, "Referencia de repouso calibrada (X=%+.2f Y=%+.2f Z=%+.2f).",
+                             ref_x, ref_y, ref_z);
+                } else if (ref_calibrada) {
+                    // Produto escalar = cos(angulo de inclinacao em relacao ao repouso)
+                    float cos_ang = (nx * ref_x) + (ny * ref_y) + (nz * ref_z);
+                    bool inclinou = (cos_ang < 0.95f); // ~18 graus de desvio
+
+                    if (inclinou) {
+                        contagem_inclinacao++;
+                    } else {
+                        contagem_inclinacao = 0;
+                    }
+
+                    if (delta_g >= LIMIAR_IMPACTO_G) {
+                        ESP_LOGW(TAG, ">>> IMPACTO DETECTADO! Pico: %.2fg (delta=%.2fg)", accel_total, delta_g);
+                        fechadura_fsm_enviar_evento(EVT_MPU_VIOLACAO, 0);
+                        vTaskDelay(pdMS_TO_TICKS(300));
+                        contador_log = 0;
+                    } else if (contagem_inclinacao >= 3) {
+                        // 3 leituras seguidas (~150 ms) inclinado: confirmacao de caixa sendo puxada
+                        ESP_LOGW(TAG, ">>> INCLINACAO / VIOLACAO DA CAIXA DETECTADA! (cos=%.2f)", cos_ang);
+                        fechadura_fsm_enviar_evento(EVT_MPU_VIOLACAO, 0);
+                        contagem_inclinacao = 0;
+                        vTaskDelay(pdMS_TO_TICKS(300));
+                        contador_log = 0;
+                    }
+                }
+            }
+
+            if (++contador_log >= 20) {
                 contador_log = 0;
-            } else if (++contador_log >= 12) {
-                contador_log = 0;
-                ESP_LOGI(TAG, "Accel[g]: X=%+.2f Y=%+.2f Z=%+.2f | Gyro[dps]: X=%+6.1f Y=%+6.1f Z=%+6.1f | Temp: %.1f C",
-                         ax, ay, az, gx, gy, gz, temp_c);
+                ESP_LOGI(TAG, "Accel[g]: X=%+.2f Y=%+.2f Z=%+.2f | Temp: %.1f C | Armado: %s",
+                         ax, ay, az, temp_c, fechadura_fsm_alarme_armado() ? "SIM" : "NAO");
             }
         }
         vTaskDelay(pdMS_TO_TICKS(50));
     }
+
 }
 
 void sensor_mpu_iniciar(void) {

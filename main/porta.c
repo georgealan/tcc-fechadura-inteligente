@@ -1,5 +1,6 @@
 #include "porta.h"
 #include "pinagem.h"
+#include "fechadura_fsm.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -124,8 +125,8 @@ static void porta_task(void *arg) {
         if (cont_botao >= DEBOUNCE_AMOSTRAS && nivel_botao_candidato != nivel_botao_estavel) {
             nivel_botao_estavel = nivel_botao_candidato;
             if (nivel_botao_estavel == BOTAO_NIVEL_PRESSIONADO) {
-                ESP_LOGW(TAG, ">>> BOTAO DE SAIDA PRESSIONADO! Acionando abertura...");
-                porta_destrancar(PORTA_TEMPO_ABERTURA_PADRAO_MS);
+                ESP_LOGW(TAG, ">>> BOTAO DE SAIDA PRESSIONADO! Notificando FSM...");
+                fechadura_fsm_enviar_evento(EVT_BOTAO_SAIDA, 0);
             }
         }
 
@@ -145,6 +146,21 @@ static void porta_task(void *arg) {
             s_porta_fechada = (nivel_mc38_estavel == MC38_NIVEL_PORTA_FECHADA);
             ESP_LOGI(TAG, ">>> SENSOR MC-38 (GPIO%d = %d): Folha da porta %s!",
                      PIN_SENSOR_PORTA, nivel_mc38_estavel, s_porta_fechada ? "FECHADA" : "ABERTA");
+
+            if (s_porta_fechada) {
+                fechadura_fsm_enviar_evento(EVT_PORTA_FECHOU, 0);
+            } else {
+                fechadura_fsm_enviar_evento(EVT_PORTA_ABRIU, 0);
+
+                // Protecao termica: porta ja abriu, entao reduz o tempo restante da solenoide para 1s
+                if (s_destrancada && xSemaphoreTake(s_porta_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+                    int64_t limite_1s_us = esp_timer_get_time() + (1000LL * 1000LL);
+                    if (s_destrancada && s_instante_trancar_us > limite_1s_us) {
+                        s_instante_trancar_us = limite_1s_us;
+                    }
+                    xSemaphoreGive(s_porta_mutex);
+                }
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(PORTA_POLL_MS));

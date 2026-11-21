@@ -12,14 +12,22 @@
 #include "olho_magico.h"
 #include "camera_uvc.h"
 #include "audio_i2s.h"
+#include "fechadura_fsm.h"
+#include "hud_tft.h"
 
 static const char *TAG = "MAIN";
+
+extern const uint8_t teste_wav_start[] asm("_binary_teste_wav_start");
+extern const uint8_t teste_wav_end[]   asm("_binary_teste_wav_end");
 
 void app_main(void) {
     ESP_LOGI(TAG, "Iniciando Fechadura Inteligente (TCC)...");
 
-    ESP_ERROR_CHECK(audio_i2s_iniciar());
-    audio_i2s_tocar(AUDIO_SOM_BOOT);
+    // Rotina de inicialização do módulo de áudio
+    //ESP_ERROR_CHECK(audio_i2s_iniciar());
+    //audio_i2s_tocar_wav(teste_wav_start, (size_t)(teste_wav_end - teste_wav_start));
+
+    ESP_ERROR_CHECK(fechadura_fsm_iniciar());
 
     // 1. Entrada e sensores no barramento I2C0
     teclado_iniciar();
@@ -30,6 +38,7 @@ void app_main(void) {
 
     // 2. Video (display + decodificador + camera USB UVC)
     ESP_ERROR_CHECK(display_tft_iniciar());
+    ESP_ERROR_CHECK(hud_tft_iniciar());
     ESP_ERROR_CHECK(olho_magico_iniciar());
     ESP_ERROR_CHECK(camera_uvc_iniciar());
 

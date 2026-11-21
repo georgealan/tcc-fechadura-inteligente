@@ -1,5 +1,6 @@
 #include "teclado.h"
 #include "pinagem.h"
+#include "fechadura_fsm.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -100,6 +101,7 @@ static void teclado_task(void *arg) {
             if (escanear_matriz() == tecla_atual) {
                 ESP_LOGI(TAG, "Tecla pressionada: [ %c ]", tecla_atual);
                 audio_i2s_tocar(AUDIO_SOM_TECLA);
+                fechadura_fsm_enviar_evento(EVT_TECLA_PRESSIONADA, tecla_atual);
                 // Futuro: enviar 'tecla_atual' via xQueueSend() para a Máquina de Estados
                 ultima_tecla = tecla_atual;
             }
