@@ -11,11 +11,15 @@
 #include "display_tft.h"
 #include "olho_magico.h"
 #include "camera_uvc.h"
+#include "audio_i2s.h"
 
 static const char *TAG = "MAIN";
 
 void app_main(void) {
     ESP_LOGI(TAG, "Iniciando Fechadura Inteligente (TCC)...");
+
+    ESP_ERROR_CHECK(audio_i2s_iniciar());
+    audio_i2s_tocar(AUDIO_SOM_BOOT);
 
     // 1. Entrada e sensores no barramento I2C0
     teclado_iniciar();

@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
+#include "audio_i2s.h"
 
 static const char *TAG = "TECLADO_4X4";
 
@@ -98,6 +99,7 @@ static void teclado_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(25));
             if (escanear_matriz() == tecla_atual) {
                 ESP_LOGI(TAG, "Tecla pressionada: [ %c ]", tecla_atual);
+                audio_i2s_tocar(AUDIO_SOM_TECLA);
                 // Futuro: enviar 'tecla_atual' via xQueueSend() para a Máquina de Estados
                 ultima_tecla = tecla_atual;
             }

@@ -7,6 +7,7 @@
 #include "driver/gpio.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "audio_i2s.h"
 
 static const char *TAG = "PORTA";
 
@@ -53,6 +54,7 @@ void porta_destrancar(uint32_t duracao_ms) {
         s_instante_trancar_us = esp_timer_get_time() + ((int64_t)duracao_ms * 1000LL);
         xSemaphoreGive(s_porta_mutex);
         ESP_LOGI(TAG, "SOLENOIDE ACIONADA -> Porta DESTRANCADA por %lu ms.", (unsigned long)duracao_ms);
+        audio_i2s_tocar(AUDIO_SOM_ACESSO_OK);
     }
 }
 

@@ -9,6 +9,9 @@
 // Inicializa o barramento I2C mestre (GPIO 4 SDA / GPIO 5 SCL) e faz scanner inicial
 esp_err_t i2c_bus_iniciar(void);
 
+// Executa reset de barramento (9 pulsos de clock no SCL) para destravar sensores apos timeout
+esp_err_t i2c_bus_recuperar(void);
+
 // Retorna o handle compartilhado para registrar sensores
 i2c_master_bus_handle_t i2c_bus_obter_handle(void);
 

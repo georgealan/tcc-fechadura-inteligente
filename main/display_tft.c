@@ -32,7 +32,7 @@ static void tft_enviar_cmd(uint8_t cmd) {
         .length = 8,
         .tx_buffer = &cmd,
     };
-    spi_device_polling_transmit(s_spi_tft, &t);
+    spi_device_transmit(s_spi_tft, &t);
 }
 
 static void tft_enviar_dados(const uint8_t *dados, size_t len) {
@@ -42,7 +42,7 @@ static void tft_enviar_dados(const uint8_t *dados, size_t len) {
         .length = len * 8,
         .tx_buffer = dados,
     };
-    spi_device_polling_transmit(s_spi_tft, &t);
+    spi_device_transmit(s_spi_tft, &t);
 }
 
 static void tft_enviar_dado_u8(uint8_t val) {
@@ -155,7 +155,7 @@ void display_tft_preencher_retangulo(uint16_t x, uint16_t y, uint16_t w, uint16_
             .length = enviar * 16,
             .tx_buffer = s_dma_buf,
         };
-        spi_device_polling_transmit(s_spi_tft, &t);
+        spi_device_transmit(s_spi_tft, &t);
         restantes -= enviar;
     }
 
@@ -192,7 +192,7 @@ void display_tft_desenhar_rgb565(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
             .length = enviar * 16,
             .tx_buffer = s_dma_buf,
         };
-        spi_device_polling_transmit(s_spi_tft, &t);
+        spi_device_transmit(s_spi_tft, &t);
         offset += enviar;
     }
 

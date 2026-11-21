@@ -30,6 +30,11 @@ static esp_err_t mpu_write_reg(uint8_t reg, uint8_t val) {
     uint8_t buf[2] = { reg, val };
     esp_err_t err = i2c_master_transmit(s_mpu_dev, buf, sizeof(buf), I2C_TIMEOUT_MS);
     i2c_bus_unlock();
+
+    if (err == ESP_ERR_TIMEOUT) {
+        i2c_bus_recuperar();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     return err;
 }
 
@@ -37,6 +42,11 @@ static esp_err_t mpu_read_regs(uint8_t reg_inicial, uint8_t *dados, size_t len) 
     if (!i2c_bus_lock(200)) return ESP_ERR_TIMEOUT;
     esp_err_t err = i2c_master_transmit_receive(s_mpu_dev, &reg_inicial, 1, dados, len, I2C_TIMEOUT_MS);
     i2c_bus_unlock();
+
+    if (err == ESP_ERR_TIMEOUT) {
+        i2c_bus_recuperar();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     return err;
 }
 
@@ -142,6 +152,14 @@ static void sensor_mpu_task(void *arg) {
 
             float accel_total = sqrtf(ax * ax + ay * ay + az * az);
             float delta_g = fabsf(accel_total - 1.0f);
+
+            // Descarta quadros corrompidos por ruido I2C:
+            // - Giroscopio zerado exatamente nos 3 eixos
+            // - Aceleracao total < 0.35g (leitura corrompida com eixo Z zerado)
+            if ((gx_raw == 0 && gy_raw == 0 && gz_raw == 0) || (accel_total < 0.35f)) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
+            }
 
             if (delta_g >= LIMIAR_IMPACTO_G) {
                 ESP_LOGW(TAG, ">>> IMPACTO / VIBRACAO DETECTADA! Pico: %.2fg (delta=%.2fg)", accel_total, delta_g);

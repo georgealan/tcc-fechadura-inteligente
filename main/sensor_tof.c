@@ -45,6 +45,11 @@ static esp_err_t tof_write_byte(uint16_t reg, uint8_t val) {
     uint8_t buf[3] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF), val };
     esp_err_t err = i2c_master_transmit(s_tof_dev, buf, sizeof(buf), I2C_TIMEOUT_MS);
     i2c_bus_unlock();
+
+    if (err == ESP_ERR_TIMEOUT) {
+        i2c_bus_recuperar();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     return err;
 }
 
@@ -56,6 +61,11 @@ static esp_err_t tof_read_byte(uint16_t reg, uint8_t *val) {
         err = i2c_master_receive(s_tof_dev, val, 1, I2C_TIMEOUT_MS);
     }
     i2c_bus_unlock();
+
+    if (err == ESP_ERR_TIMEOUT) {
+        i2c_bus_recuperar();
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
     return err;
 }
 

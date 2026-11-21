@@ -1,5 +1,6 @@
 #include "i2c_bus.h"
 #include "pinagem.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -70,4 +71,33 @@ void i2c_bus_unlock(void) {
         xSemaphoreGive(s_i2c_mutex);
     }
 }
-// FIM DO ARQUIVO
+
+esp_err_t i2c_bus_recuperar(void) {
+    static int64_t ultimo_reset_us = 0;
+
+    i2c_master_bus_handle_t bus = i2c_bus_obter_handle();
+    if (bus == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!i2c_bus_lock(300)) {
+        return ESP_ERR_TIMEOUT;
+    }
+
+    int64_t agora_us = esp_timer_get_time();
+    if ((agora_us - ultimo_reset_us) < 500000LL) {
+        // Outro sensor acabou de resetar o barramento ha menos de 500 ms
+        i2c_bus_unlock();
+        return ESP_OK;
+    }
+
+    ESP_LOGW(TAG, "Timeout I2C detectado -> Executando i2c_master_bus_reset()...");
+    esp_err_t err = i2c_master_bus_reset(bus);
+    ultimo_reset_us = esp_timer_get_time();
+    i2c_bus_unlock();
+
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Falha ao resetar barramento I2C: %s", esp_err_to_name(err));
+    }
+    return err;
+}

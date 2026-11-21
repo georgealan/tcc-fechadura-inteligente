@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "esp_err.h"
 
-#define PORTA_TEMPO_ABERTURA_PADRAO_MS  3000
+#define PORTA_TEMPO_ABERTURA_PADRAO_MS  5000
 
 // Inicializa GPIOs (rele, botao de saida e MC-38) e inicia a task de monitoramento
 esp_err_t porta_iniciar(void);

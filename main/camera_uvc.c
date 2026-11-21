@@ -141,7 +141,7 @@ static void uvc_event_cb(const uvc_host_driver_event_data_t *event, void *user_c
             },
             .advanced = {
                 .number_of_frame_buffers = UVC_FRAME_COUNT,
-                .frame_size = UVC_ESTIMATE_JPG_SIZE_B(480, 320, 16),
+                .frame_size = 64 * 1024,
                 .number_of_urbs = 4,
                 .urb_size = 10 * 1024,
             },
