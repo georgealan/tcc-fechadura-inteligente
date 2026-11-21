@@ -3,6 +3,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
+#include "porta.h"
 #include "teclado.h"
 #include "i2c_bus.h"
 #include "sensor_tof.h"
@@ -18,6 +19,7 @@ void app_main(void) {
 
     // 1. Entrada e sensores no barramento I2C0
     teclado_iniciar();
+    ESP_ERROR_CHECK(porta_iniciar());
     ESP_ERROR_CHECK(i2c_bus_iniciar());
     sensor_tof_iniciar();
     sensor_mpu_iniciar();

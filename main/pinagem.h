@@ -20,10 +20,10 @@
 #define PIN_I2C_SDA         GPIO_NUM_4
 #define PIN_I2C_SCL         GPIO_NUM_5
 
-// --- Atuadores e Sensores de Porta ---
+// --- Controle da Porta (Relé, Botão de Saída e Sensor Magnético MC-38) ---
 #define PIN_BOTAO_SAIDA     GPIO_NUM_6
 #define PIN_RELE_SOLENOIDE  GPIO_NUM_7
-#define PIN_SENSOR_MC38     GPIO_NUM_18
+#define PIN_SENSOR_PORTA    GPIO_NUM_18
 
 // --- Áudio I2S (MAX98357A) ---
 #define PIN_I2S_LRC         GPIO_NUM_15

@@ -17,7 +17,7 @@ static const char *TAG = "MPU6050";
 #define MPU6050_REG_PWR_MGMT_1   0x6B
 #define MPU6050_REG_WHO_AM_I     0x75
 
-#define I2C_TIMEOUT_MS           100
+#define I2C_TIMEOUT_MS           200
 
 #define ACCEL_LSB_POR_G          16384.0f
 #define GYRO_LSB_POR_DPS         131.0f
