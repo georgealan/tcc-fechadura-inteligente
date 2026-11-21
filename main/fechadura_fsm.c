@@ -142,7 +142,21 @@ static void processar_tecla(char tecla) {
                 ESP_LOGI(TAG, ">>> ALARME DESARMADO POR SENHA VALIDA.");
                 limpar_buffer_senha();
                 s_erros_consecutivos = 0;
-                mudar_estado(ESTADO_REARMANDO_ALARME);
+                if (s_estado == ESTADO_ALARME_ARROMBAMENTO) {
+                ESP_LOGI(TAG, ">>> ALARME DESARMADO POR SENHA VALIDA.");
+                limpar_buffer_senha();
+                s_erros_consecutivos = 0;
+                audio_i2s_tocar(AUDIO_SOM_ACESSO_OK);
+
+                if (porta_esta_fechada()) {
+                    mudar_estado(ESTADO_REARMANDO_ALARME);
+                } else {
+                    ESP_LOGW(TAG, "Alarme desarmado, mas folha da porta segue ABERTA (MC-38).");
+                    mudar_estado(ESTADO_PORTA_ABERTA);
+                }
+            } else {
+                liberar_acesso("Senha Teclado 4x4");
+            }
                 audio_i2s_tocar(AUDIO_SOM_ACESSO_OK);
             } else {
                 liberar_acesso("Senha Teclado 4x4");
@@ -252,10 +266,14 @@ static void verificar_temporizadores(void) {
             break;
 
         case ESTADO_DESTRANCADA_AUTORIZADA:
-            // Se passaram os 5s e ninguem abriu a porta, aguarda estabilizar o tranco da solenoide
             if (tempo_no_estado_ms >= TEMPO_DESTRANCADA_MS) {
-                ESP_LOGI(TAG, "Tempo de abertura encerrado sem abrir a porta. Rearmando...");
-                mudar_estado(ESTADO_REARMANDO_ALARME);
+                if (porta_esta_fechada()) {
+                    ESP_LOGI(TAG, "Tempo de abertura encerrado sem abrir a porta. Rearmando...");
+                    mudar_estado(ESTADO_REARMANDO_ALARME);
+                } else {
+                    ESP_LOGI(TAG, "Solenoide desligada, mas porta segue ABERTA (MC-38).");
+                    mudar_estado(ESTADO_PORTA_ABERTA);
+                }
             }
             break;
 
@@ -273,7 +291,10 @@ static void verificar_temporizadores(void) {
             break;
 
         case ESTADO_REARMANDO_ALARME:
-            if (tempo_no_estado_ms >= TEMPO_ESTABILIZACAO_MPU_MS) {
+            if (!porta_esta_fechada()) {
+                ESP_LOGW(TAG, "Rearme cancelado: porta encontra-se ABERTA (MC-38).");
+                mudar_estado(ESTADO_PORTA_ABERTA);
+            } else if (tempo_no_estado_ms >= TEMPO_ESTABILIZACAO_MPU_MS) {
                 ESP_LOGI(TAG, ">>> SISTEMA ARMADO: Porta trancada e MPU-6050 monitorando.");
                 mudar_estado(ESTADO_REPOUSO_TRANCADA);
             }
