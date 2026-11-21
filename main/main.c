@@ -14,6 +14,7 @@
 #include "audio_i2s.h"
 #include "fechadura_fsm.h"
 #include "hud_tft.h"
+#include "wifi_manager.h"
 
 static const char *TAG = "MAIN";
 
@@ -39,6 +40,7 @@ void app_main(void) {
     // 2. Video (display + decodificador + camera USB UVC)
     ESP_ERROR_CHECK(display_tft_iniciar());
     ESP_ERROR_CHECK(hud_tft_iniciar());
+    ESP_ERROR_CHECK(wifi_manager_iniciar());
     ESP_ERROR_CHECK(olho_magico_iniciar());
     ESP_ERROR_CHECK(camera_uvc_iniciar());
 

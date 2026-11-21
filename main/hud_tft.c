@@ -2,6 +2,7 @@
 #include "display_tft.h"
 #include "fechadura_fsm.h"
 #include "sensor_tof.h"
+#include "wifi_manager.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -271,9 +272,9 @@ static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool prese
             break;
     }
 
-    // Barra superior (y=0..47)
-    display_tft_preencher_retangulo(0, 0, TFT_LARGURA, 48, cor_topo);
-    desenhar_texto_centralizado(4, 17, TFT_LARGURA - 8, 2, txt_topo, cor_txt_topo, cor_topo);
+    // Barra superior de titulo (y=0..31) — deixa y=32..47 reservado para a faixa do Wi-Fi
+    display_tft_preencher_retangulo(0, 0, TFT_LARGURA, 32, cor_topo);
+    desenhar_texto_centralizado(4, 9, TFT_LARGURA - 8, 2, txt_topo, cor_txt_topo, cor_topo);
 
     // Cartao principal (x=8, y=298, w=304, h=58)
     display_tft_preencher_retangulo(8, 298, 304, 58, cor_card);
@@ -321,6 +322,33 @@ static void atualizar_card_presenca(bool valida, uint16_t dist_mm, bool presenca
     desenhar_texto_centralizado(10, 446, 300, 2, txt, cor_txt, COR_CARD_FUNDO);
 }
 
+static void atualizar_barra_wifi(wifi_status_t st, const char *ip) {
+    char txt[40];
+    uint16_t cor_txt = COR_CINZA_CLARO;
+
+    switch (st) {
+        case WIFI_STATUS_CONECTADO:
+            snprintf(txt, sizeof(txt), "WIFI: OK - %s", ip);
+            cor_txt = COR_VERDE;
+            break;
+        case WIFI_STATUS_CONECTANDO:
+            snprintf(txt, sizeof(txt), "WIFI: CONECTANDO...");
+            cor_txt = COR_CIANO;
+            break;
+        case WIFI_STATUS_BUSCANDO:
+            snprintf(txt, sizeof(txt), "WIFI: BUSCANDO REDE...");
+            cor_txt = COR_AMARELO;
+            break;
+        default:
+            snprintf(txt, sizeof(txt), "WIFI: OFFLINE");
+            cor_txt = COR_LARANJA;
+            break;
+    }
+
+    display_tft_preencher_retangulo(0, 32, TFT_LARGURA, 16, COR_CARD_FUNDO);
+    desenhar_texto_centralizado(4, 37, TFT_LARGURA - 8, 1, txt, cor_txt, COR_CARD_FUNDO);
+}
+
 void hud_tft_acordar(void) {
     s_acordar_manual_us = esp_timer_get_time();
 }
@@ -343,6 +371,8 @@ static void hud_tft_task(void *arg) {
     uint16_t ult_dist_cm = 0xFFFF;
     bool ult_piscar = false;
     bool backlight_ligado = true;
+    wifi_status_t ult_wifi_st = (wifi_status_t)(-1);
+    char ult_wifi_ip[16] = "";
 
     while (1) {
         fechadura_hud_info_t info = {0};
@@ -351,6 +381,9 @@ static void hud_tft_task(void *arg) {
         uint16_t dist_mm = 0;
         bool presenca = false;
         bool tof_valido = sensor_tof_obter_leitura(&dist_mm, &presenca);
+        char wifi_ip[16] = "";
+        wifi_status_t wifi_st = wifi_manager_obter_info(wifi_ip, sizeof(wifi_ip), NULL, 0);
+        bool mudou_wifi = primeiro_desenho || (wifi_st != ult_wifi_st) || (strcmp(wifi_ip, ult_wifi_ip) != 0);
         uint16_t dist_cm = tof_valido ? (dist_mm / 10) : 0xFFFF;
 
         bool piscar_alarme = false;
@@ -409,6 +442,12 @@ static void hud_tft_task(void *arg) {
             atualizar_card_presenca(tof_valido, dist_mm, presenca);
             ult_dist_cm = dist_cm;
             ult_tof_valido = tof_valido;
+        }
+        if (mudou_wifi) {
+            atualizar_barra_wifi(wifi_st, wifi_ip);
+            ult_wifi_st = wifi_st;
+            strncpy(ult_wifi_ip, wifi_ip, sizeof(ult_wifi_ip) - 1);
+            ult_wifi_ip[sizeof(ult_wifi_ip) - 1] = '\0';
         }
 
         ult_info = info;
