@@ -8,6 +8,7 @@
 #include "freertos/queue.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "facial_client.h"
 
 static const char *TAG = "FECHADURA_FSM";
 
@@ -42,6 +43,7 @@ static int64_t s_ultima_atividade_us = 0;
 static int64_t s_ultima_tecla_us = 0;
 static int64_t s_ultima_sirene_us = 0;
 static bool s_aviso_porta_aberta_enviado = false;
+static char s_usuario_autorizado[32] = "";
 
 static const char *nome_estado(fechadura_estado_t est) {
     switch (est) {
@@ -52,6 +54,7 @@ static const char *nome_estado(fechadura_estado_t est) {
         case ESTADO_REARMANDO_ALARME:       return "REARMANDO_ALARME";
         case ESTADO_BLOQUEIO_TENTATIVAS:    return "BLOQUEIO_TENTATIVAS";
         case ESTADO_ALARME_ARROMBAMENTO:    return "ALARME_ARROMBAMENTO";
+        case ESTADO_RECONHECIMENTO_FACIAL:  return "RECONHECIMENTO_FACIAL";
         default:                            return "DESCONHECIDO";
     }
 }
@@ -70,13 +73,17 @@ static void mudar_estado(fechadura_estado_t novo_estado) {
     // Alarme MPU-6050 so fica armado quando a porta esta fechada e sem abertura autorizada
     bool armado = (novo_estado == ESTADO_REPOUSO_TRANCADA ||
                    novo_estado == ESTADO_DIGITANDO_SENHA  ||
+                   novo_estado == ESTADO_RECONHECIMENTO_FACIAL ||
                    novo_estado == ESTADO_BLOQUEIO_TENTATIVAS);
 
     portENTER_CRITICAL(&s_fsm_mux);
     s_estado = novo_estado;
+    s_alarme_armado = armado;
     s_timestamp_estado_us = agora_us;
     s_ultima_atividade_us = agora_us;
-    s_alarme_armado = armado;
+    if (novo_estado == ESTADO_REPOUSO_TRANCADA) {
+        s_usuario_autorizado[0] = '\0';
+    }
     if (novo_estado == ESTADO_PORTA_ABERTA) {
         s_aviso_porta_aberta_enviado = false;
     }
@@ -107,6 +114,10 @@ static void disparar_alarme(const char *motivo) {
 }
 
 static void processar_tecla(char tecla) {
+    if (s_estado == ESTADO_REPOUSO_TRANCADA || s_estado == ESTADO_RECONHECIMENTO_FACIAL) {
+        mudar_estado(ESTADO_DIGITANDO_SENHA);
+    }
+
     if (s_estado == ESTADO_BLOQUEIO_TENTATIVAS) {
         int64_t decorrido_ms = (esp_timer_get_time() - s_timestamp_estado_us) / 1000;
         int64_t restante_s = (TEMPO_BLOQUEIO_TECLADO_MS - decorrido_ms) / 1000;
@@ -213,9 +224,16 @@ static void processar_evento(const fsm_msg_t *msg) {
             liberar_acesso("Botao de Saida Interno");
             break;
 
-        case EVT_ACESSO_REMOTO_OK:
-            liberar_acesso("Reconhecimento Facial / VPS");
+        case EVT_ACESSO_REMOTO_OK: {
+            char nome_ia[32] = "";
+            facial_client_obter_ultimo_nome(nome_ia, sizeof(nome_ia));
+            portENTER_CRITICAL(&s_fsm_mux);
+            strncpy(s_usuario_autorizado, nome_ia, sizeof(s_usuario_autorizado) - 1);
+            s_usuario_autorizado[sizeof(s_usuario_autorizado) - 1] = '\0';
+            portEXIT_CRITICAL(&s_fsm_mux);
+            liberar_acesso("Reconhecimento Facial / IA");
             break;
+        }
 
         case EVT_PORTA_ABRIU:
             if (s_estado == ESTADO_DESTRANCADA_AUTORIZADA || s_estado == ESTADO_REARMANDO_ALARME) {
@@ -242,8 +260,23 @@ static void processar_evento(const fsm_msg_t *msg) {
 
         case EVT_PRESENCA_DETECTADA:
             if (s_estado == ESTADO_REPOUSO_TRANCADA) {
-                ESP_LOGI(TAG, "Visitante detectado em frente a porta (VL53L1X).");
-                // Futuro: acionar captura/envio de frame para reconhecimento facial na VPS
+                if (facial_client_solicitar_ciclo()) {
+                    ESP_LOGI(TAG, "Visitante detectado (VL53L1X) -> Iniciando Reconhecimento Facial...");
+                    mudar_estado(ESTADO_RECONHECIMENTO_FACIAL);
+                }
+            }
+            break;
+
+        case EVT_FACIAL_NEGADO:
+            audio_i2s_tocar(AUDIO_SOM_ACESSO_NEGADO);
+            if (s_estado == ESTADO_RECONHECIMENTO_FACIAL) {
+                mudar_estado(ESTADO_REPOUSO_TRANCADA);
+            }
+            break;
+
+        case EVT_FACIAL_ERRO:
+            if (s_estado == ESTADO_RECONHECIMENTO_FACIAL) {
+                mudar_estado(ESTADO_REPOUSO_TRANCADA);
             }
             break;
 
@@ -367,6 +400,8 @@ void fechadura_fsm_obter_hud_info(fechadura_hud_info_t *info) {
     bool esquecida = s_aviso_porta_aberta_enviado;
     int64_t ts_estado = s_timestamp_estado_us;
     int64_t ult_ativ = s_ultima_atividade_us;
+    strncpy(info->usuario_autorizado, s_usuario_autorizado, sizeof(info->usuario_autorizado) - 1);
+    info->usuario_autorizado[sizeof(info->usuario_autorizado) - 1] = '\0';
     portEXIT_CRITICAL(&s_fsm_mux);
 
     uint32_t restante_s = 0;

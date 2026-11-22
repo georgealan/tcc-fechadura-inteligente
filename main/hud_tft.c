@@ -11,6 +11,7 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "facial_client.h"
 
 static const char *TAG = "HUD_TFT";
 
@@ -178,7 +179,7 @@ static void desenhar_base_hud(void) {
     desenhar_texto_centralizado(10, 430, 300, 1, "PRESENCA EXTERNA (VL53L1X)", COR_CINZA_CLARO, COR_CARD_FUNDO);
 }
 
-static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool presenca, bool piscar_alarme) {
+static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool presenca, bool piscar_alarme, facial_fase_t fase_ia) {
     uint16_t cor_topo = COR_AZUL_MARINHO;
     uint16_t cor_txt_topo = COR_BRANCO;
     const char *txt_topo = "FECHADURA INTELIGENTE";
@@ -191,6 +192,25 @@ static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool prese
 
     switch (info->estado) {
         case ESTADO_REPOUSO_TRANCADA:
+            if (fase_ia == FACIAL_FASE_NEGADO) {
+                cor_topo = COR_LARANJA_ESC;
+                txt_topo = "ACESSO NEGADO";
+                cor_card = COR_LARANJA_ESC;
+                cor_txt_l1 = COR_BRANCO;
+                cor_txt_l2 = COR_AMARELO;
+                snprintf(linha1, sizeof(linha1), "ROSTO DESCONHECIDO");
+                snprintf(linha2, sizeof(linha2), "USE A SENHA");
+                break;
+            } else if (fase_ia == FACIAL_FASE_SEM_ROSTO) {
+                cor_topo = COR_AZUL_MARINHO;
+                txt_topo = "FECHADURA INTELIGENTE";
+                cor_card = COR_CARD_FUNDO;
+                cor_txt_l1 = COR_AMARELO;
+                cor_txt_l2 = COR_BRANCO;
+                snprintf(linha1, sizeof(linha1), "ROSTO NAO VISIVEL");
+                snprintf(linha2, sizeof(linha2), "APROXIME-SE OU SENHA");
+                break;
+            }
             if (presenca) {
                 cor_topo = COR_CIANO_ESC;
                 txt_topo = "VISITANTE NA PORTA";
@@ -221,6 +241,11 @@ static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool prese
             break;
 
         case ESTADO_DESTRANCADA_AUTORIZADA:
+            if (info->usuario_autorizado[0] != '\0') {
+                snprintf(linha1, sizeof(linha1), "OLA, %.14s!", info->usuario_autorizado);
+            } else {
+                snprintf(linha1, sizeof(linha1), "PORTA DESTRANCADA");
+            }
             cor_topo = COR_VERDE_ESCURO;
             txt_topo = "ACESSO LIBERADO";
             cor_card = COR_VERDE_ESCURO;
@@ -269,6 +294,21 @@ static void atualizar_topo_e_banner(const fechadura_hud_info_t *info, bool prese
             cor_txt_l2 = piscar_alarme ? COR_AMARELO : COR_PRETO;
             snprintf(linha1, sizeof(linha1), "ARROMBAMENTO!");
             snprintf(linha2, sizeof(linha2), "BOTAO OU SENHA");
+            break;
+
+        case ESTADO_RECONHECIMENTO_FACIAL:
+            cor_topo = COR_CIANO_ESC;
+            txt_topo = "RECONHECIMENTO FACIAL";
+            cor_card = COR_CIANO_ESC;
+            cor_txt_l1 = COR_BRANCO;
+            cor_txt_l2 = COR_AMARELO;
+            if (fase_ia == FACIAL_FASE_ENVIANDO) {
+                snprintf(linha1, sizeof(linha1), "ANALISANDO ROSTO...");
+                snprintf(linha2, sizeof(linha2), "AGUARDE SERVIDOR IA");
+            } else {
+                snprintf(linha1, sizeof(linha1), "VISITANTE DETECTADO");
+                snprintf(linha2, sizeof(linha2), "OLHE PARA A CAMERA");
+            }
             break;
     }
 
@@ -373,10 +413,12 @@ static void hud_tft_task(void *arg) {
     bool backlight_ligado = true;
     wifi_status_t ult_wifi_st = (wifi_status_t)(-1);
     char ult_wifi_ip[16] = "";
+    facial_fase_t ult_fase_ia = (facial_fase_t)(-1);
 
     while (1) {
         fechadura_hud_info_t info = {0};
         fechadura_fsm_obter_hud_info(&info);
+        facial_fase_t fase_ia = facial_client_obter_fase();
 
         uint16_t dist_mm = 0;
         bool presenca = false;
@@ -412,7 +454,8 @@ static void hud_tft_task(void *arg) {
                             (info.tempo_restante_s != ult_info.tempo_restante_s) ||
                             (info.porta_esquecida != ult_info.porta_esquecida) ||
                             (presenca != ult_presenca) ||
-                            (piscar_alarme != ult_piscar);
+                            (piscar_alarme != ult_piscar) ||
+                            (fase_ia != ult_fase_ia);
 
         bool mudou_porta = primeiro_desenho ||
                            (info.porta_fechada != ult_info.porta_fechada) ||
@@ -430,7 +473,8 @@ static void hud_tft_task(void *arg) {
                          (tof_valido && diff_cm >= 3);
 
         if (mudou_banner) {
-            atualizar_topo_e_banner(&info, presenca, piscar_alarme);
+            atualizar_topo_e_banner(&info, presenca, piscar_alarme, fase_ia);
+            ult_fase_ia = fase_ia;
         }
         if (mudou_porta) {
             atualizar_card_porta(info.porta_fechada, info.estado);

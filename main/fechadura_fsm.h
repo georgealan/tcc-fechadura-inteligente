@@ -8,6 +8,7 @@
 typedef enum {
     ESTADO_REPOUSO_TRANCADA = 0,    // Porta fechada e trancada (alarme ARMADO)
     ESTADO_DIGITANDO_SENHA,         // Recebendo digitos do teclado 4x4 (alarme ARMADO)
+    ESTADO_RECONHECIMENTO_FACIAL,
     ESTADO_DESTRANCADA_AUTORIZADA,  // Solenoide ativa por 5s (alarme DESARMADO)
     ESTADO_PORTA_ABERTA,            // MC-38 aberto apos autorizacao (alarme DESARMADO)
     ESTADO_REARMANDO_ALARME,        // Porta fechou: aguarda 3s estabilizar antes de armar MPU
@@ -22,7 +23,9 @@ typedef enum {
     EVT_PORTA_FECHOU,               // Sensor MC-38 mudou para FECHADA
     EVT_PRESENCA_DETECTADA,         // Sensor VL53L1X detectou pessoa proxima
     EVT_MPU_VIOLACAO,               // Impacto forte ou inclinacao da caixa > 18 graus
-    EVT_ACESSO_REMOTO_OK            // Gancho futuro: reconhecimento facial / comando da VPS
+    EVT_ACESSO_REMOTO_OK,           // Gancho futuro: reconhecimento facial / comando da VPS
+    EVT_FACIAL_NEGADO,
+    EVT_FACIAL_ERRO
 } fechadura_evento_tipo_t;
 
 typedef struct {
@@ -32,6 +35,7 @@ typedef struct {
     bool porta_esquecida;
     uint32_t tempo_restante_s;
     int64_t ultima_atividade_us;
+    char usuario_autorizado[32];
 } fechadura_hud_info_t;
 
 // Retorna um snapshot thread-safe do estado da fechadura para o display TFT

@@ -29,6 +29,7 @@ static SemaphoreHandle_t s_frame_mutex = NULL;
 static SemaphoreHandle_t s_sem_novo_frame = NULL;
 static jpeg_dec_handle_t s_jpeg_dec = NULL;
 static volatile bool s_iniciado = false;
+static int64_t s_ultimo_frame_us = 0;
 
 static uint8_t *alocar_alinhado_16(size_t tamanho, const char *nome) {
     // Prioriza PSRAM externa (ESP32-S3 N32R16V); faz fallback para RAM interna se PSRAM estiver desativada
@@ -80,9 +81,28 @@ void olho_magico_enviar_frame(const uint8_t *jpeg_data, size_t jpeg_len) {
     if (xSemaphoreTake(s_frame_mutex, 0) == pdTRUE) {
         memcpy(s_jpeg_buf, jpeg_data, jpeg_len);
         s_jpeg_len = jpeg_len;
+        s_ultimo_frame_us = esp_timer_get_time();
         xSemaphoreGive(s_frame_mutex);
         xSemaphoreGive(s_sem_novo_frame);
     }
+}
+
+bool olho_magico_capturar_jpeg(uint8_t *destino, size_t max_len, size_t *out_len) {
+    if (!s_iniciado || s_frame_mutex == NULL || destino == NULL || out_len == NULL) {
+        return false;
+    }
+
+    bool ok = false;
+    if (xSemaphoreTake(s_frame_mutex, pdMS_TO_TICKS(300)) == pdTRUE) {
+        int64_t idade_ms = (esp_timer_get_time() - s_ultimo_frame_us) / 1000;
+        if (s_jpeg_len >= 4 && s_jpeg_len <= max_len && idade_ms < 2500) {
+            memcpy(destino, s_jpeg_buf, s_jpeg_len);
+            *out_len = s_jpeg_len;
+            ok = true;
+        }
+        xSemaphoreGive(s_frame_mutex);
+    }
+    return ok;
 }
 
 static void olho_magico_task(void *arg) {
