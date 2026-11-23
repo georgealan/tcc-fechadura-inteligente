@@ -53,4 +53,7 @@ bool fechadura_fsm_alarme_armado(void);
 // Retorna o estado atual (util para o display TFT e telemetria)
 fechadura_estado_t fechadura_fsm_obter_estado(void);
 
+// define o nome exibido no HUD (para funcionar tanto para reconhecimento facial quanto para abertura remota e PIN):
+void fechadura_fsm_definir_usuario_autorizado(const char *nome);
+
 #endif // FECHADURA_FSM_H

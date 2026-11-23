@@ -16,6 +16,7 @@
 #include "hud_tft.h"
 #include "wifi_manager.h"
 #include "facial_client.h"
+#include "cloud_sync.h"
 
 static const char *TAG = "MAIN";
 
@@ -43,6 +44,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(hud_tft_iniciar());
     ESP_ERROR_CHECK(wifi_manager_iniciar());
     ESP_ERROR_CHECK(facial_client_iniciar());
+    ESP_ERROR_CHECK(cloud_sync_iniciar());
     ESP_ERROR_CHECK(olho_magico_iniciar());
     ESP_ERROR_CHECK(camera_uvc_iniciar());
 

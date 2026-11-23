@@ -267,6 +267,7 @@ static void executar_reconhecimento(void) {
         inspecionar_wav_psram(s_wav_resp, total_lido);
 
         definir_fase(FACIAL_FASE_OCIOSO);
+        fechadura_fsm_definir_usuario_autorizado(nome_limpo);
         fechadura_fsm_enviar_evento(EVT_ACESSO_REMOTO_OK, 0);
 
     } else if (http_status == 401 || strcasecmp(resp_hdrs.status, "negado") == 0) {

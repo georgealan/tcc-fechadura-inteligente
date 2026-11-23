@@ -9,6 +9,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "facial_client.h"
+#include "cloud_sync.h"
 
 static const char *TAG = "FECHADURA_FSM";
 
@@ -74,7 +75,8 @@ static void mudar_estado(fechadura_estado_t novo_estado) {
     bool armado = (novo_estado == ESTADO_REPOUSO_TRANCADA ||
                    novo_estado == ESTADO_DIGITANDO_SENHA  ||
                    novo_estado == ESTADO_RECONHECIMENTO_FACIAL ||
-                   novo_estado == ESTADO_BLOQUEIO_TENTATIVAS);
+                   novo_estado == ESTADO_BLOQUEIO_TENTATIVAS ||
+                   novo_estado == ESTADO_ALARME_ARROMBAMENTO);
 
     portENTER_CRITICAL(&s_fsm_mux);
     s_estado = novo_estado;
@@ -88,6 +90,13 @@ static void mudar_estado(fechadura_estado_t novo_estado) {
         s_aviso_porta_aberta_enviado = false;
     }
     portEXIT_CRITICAL(&s_fsm_mux);
+
+    // Dispara fora da secao critica (usa semaforo FreeRTOS internamente)
+    if (novo_estado == ESTADO_ALARME_ARROMBAMENTO) {
+        cloud_sync_notificar_arrombamento(
+            "ALERTA: Tentativa de arrombamento detectada (sensor MC-38 ou impacto MPU-6050)!"
+        );
+    }
 }
 
 static void liberar_acesso(const char *origem) {
@@ -148,12 +157,26 @@ static void processar_tecla(char tecla) {
     if (tecla == '#') {
         if (s_len_senha == 0) return;
 
-        if (strcmp(s_buffer_senha, SENHA_MESTRA) == 0) {
-            if (s_estado == ESTADO_ALARME_ARROMBAMENTO) {
-                ESP_LOGI(TAG, ">>> ALARME DESARMADO POR SENHA VALIDA.");
-                limpar_buffer_senha();
-                s_erros_consecutivos = 0;
-                if (s_estado == ESTADO_ALARME_ARROMBAMENTO) {
+        bool tentando_desarmar = (s_estado == ESTADO_ALARME_ARROMBAMENTO);
+        char nome_pin[32] = "";
+        pin_online_resultado_t res_pin = cloud_sync_validar_pin(
+            s_buffer_senha, tentando_desarmar, nome_pin, sizeof(nome_pin)
+        );
+
+        bool senha_valida = false;
+        if (res_pin == PIN_ONLINE_AUTORIZADO) {
+            senha_valida = true;
+            fechadura_fsm_definir_usuario_autorizado(nome_pin);
+        } else if (res_pin == PIN_ONLINE_OFFLINE) {
+            // Fallback offline: valida contra a SENHA_MESTRA local do firmware
+            if (strcmp(s_buffer_senha, SENHA_MESTRA) == 0) {
+                senha_valida = true;
+                fechadura_fsm_definir_usuario_autorizado("SENHA LOCAL");
+            }
+        }
+
+        if (senha_valida) {
+            if (tentando_desarmar) {
                 ESP_LOGI(TAG, ">>> ALARME DESARMADO POR SENHA VALIDA.");
                 limpar_buffer_senha();
                 s_erros_consecutivos = 0;
@@ -165,10 +188,6 @@ static void processar_tecla(char tecla) {
                     ESP_LOGW(TAG, "Alarme desarmado, mas folha da porta segue ABERTA (MC-38).");
                     mudar_estado(ESTADO_PORTA_ABERTA);
                 }
-            } else {
-                liberar_acesso("Senha Teclado 4x4");
-            }
-                audio_i2s_tocar(AUDIO_SOM_ACESSO_OK);
             } else {
                 liberar_acesso("Senha Teclado 4x4");
             }
@@ -225,13 +244,7 @@ static void processar_evento(const fsm_msg_t *msg) {
             break;
 
         case EVT_ACESSO_REMOTO_OK: {
-            char nome_ia[32] = "";
-            facial_client_obter_ultimo_nome(nome_ia, sizeof(nome_ia));
-            portENTER_CRITICAL(&s_fsm_mux);
-            strncpy(s_usuario_autorizado, nome_ia, sizeof(s_usuario_autorizado) - 1);
-            s_usuario_autorizado[sizeof(s_usuario_autorizado) - 1] = '\0';
-            portEXIT_CRITICAL(&s_fsm_mux);
-            liberar_acesso("Reconhecimento Facial / IA");
+            liberar_acesso("Reconhecimento Facial / App Remoto");
             break;
         }
 
@@ -387,6 +400,17 @@ bool fechadura_fsm_alarme_armado(void) {
 
 fechadura_estado_t fechadura_fsm_obter_estado(void) {
     return s_estado;
+}
+
+void fechadura_fsm_definir_usuario_autorizado(const char *nome) {
+    portENTER_CRITICAL(&s_fsm_mux);
+    if (nome && nome[0] != '\0') {
+        strncpy(s_usuario_autorizado, nome, sizeof(s_usuario_autorizado) - 1);
+        s_usuario_autorizado[sizeof(s_usuario_autorizado) - 1] = '\0';
+    } else {
+        s_usuario_autorizado[0] = '\0';
+    }
+    portEXIT_CRITICAL(&s_fsm_mux);
 }
 
 void fechadura_fsm_obter_hud_info(fechadura_hud_info_t *info) {
