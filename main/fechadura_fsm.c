@@ -1,6 +1,7 @@
 #include "fechadura_fsm.h"
 #include "porta.h"
 #include "audio_i2s.h"
+#include "audios_fixos.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -198,12 +199,15 @@ static void processar_tecla(char tecla) {
             limpar_buffer_senha();
             audio_i2s_tocar(AUDIO_SOM_ACESSO_NEGADO);
 
-            if (s_estado != ESTADO_ALARME_ARROMBAMENTO) {
-                if (s_erros_consecutivos >= MAX_TENTATIVAS_ERRADAS) {
-                    ESP_LOGE(TAG, ">>> LIMITE DE TENTATIVAS ATINGIDO! Teclado bloqueado por %d s.",
-                             TEMPO_BLOQUEIO_TECLADO_MS / 1000);
-                    mudar_estado(ESTADO_BLOQUEIO_TENTATIVAS);
-                } else {
+            if (s_estado != ESTADO_ALARME_ARROMBAMENTO &&
+                s_erros_consecutivos >= MAX_TENTATIVAS_ERRADAS) {
+                ESP_LOGE(TAG, ">>> LIMITE DE TENTATIVAS ATINGIDO! Teclado bloqueado por %d s.",
+                         TEMPO_BLOQUEIO_TECLADO_MS / 1000);
+                audio_falar_teclado_bloqueado();
+                mudar_estado(ESTADO_BLOQUEIO_TENTATIVAS);
+            } else {
+                audio_falar_senha_incorreta();
+                if (s_estado != ESTADO_ALARME_ARROMBAMENTO) {
                     mudar_estado(ESTADO_REPOUSO_TRANCADA);
                 }
             }
@@ -331,8 +335,9 @@ static void verificar_temporizadores(void) {
                 portEXIT_CRITICAL(&s_fsm_mux);
 
                 ESP_LOGW(TAG, ">>> ATENCAO: Porta aberta ha mais de %d segundos!",
-                         TEMPO_PORTA_ESQUECIDA_MS / 1000);
+                    TEMPO_PORTA_ESQUECIDA_MS / 1000);
                 audio_i2s_tocar(AUDIO_SOM_CAMPAINHA);
+                audio_falar_porta_aberta();
             }
             break;
 

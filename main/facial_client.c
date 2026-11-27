@@ -3,6 +3,8 @@
 #include "wifi_manager.h"
 #include "olho_magico.h"
 #include "fechadura_fsm.h"
+#include "audio_i2s.h"
+#include "audios_fixos.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -20,7 +22,7 @@ static const char *TAG = "FACIAL_IA";
 
 #define FACIAL_JPEG_MAX_BYTES       (64 * 1024)
 #define FACIAL_WAV_MAX_BYTES        (1024 * 1024) // 1 MB na PSRAM (~21s de audio 24kHz 16-bit mono)
-#define FACIAL_ATRASO_POSICAO_MS    1500          // Tempo para visitante olhar para a camera
+#define FACIAL_ATRASO_POSICAO_MS    10500          // Tempo para visitante olhar para a camera
 #define FACIAL_COOLDOWN_MS          10000         // Intervalo minimo entre ciclos automaticos
 #define FACIAL_HTTP_TIMEOUT_MS      25000         // Folga para InsightFace + Kokoro TTS em CPU
 #define FACIAL_BOUNDARY             "----ESP32TCCFacialBoundary"
@@ -131,7 +133,7 @@ static void inspecionar_wav_psram(const uint8_t *wav, size_t len) {
         ESP_LOGI(TAG, "WAV Kokoro recebido na PSRAM: %u bytes | %lu Hz | %u-bit | %u ch | ~%.1f s",
                  (unsigned)len, (unsigned long)sample_rate, (unsigned)bits, (unsigned)canais, duracao_s);
         // Gancho futuro para o novo MAX98357A:
-        // audio_i2s_tocar_wav_psram(wav, len);
+        audio_i2s_tocar_wav(wav, len);
     } else {
         ESP_LOGW(TAG, "Resposta recebida (%u bytes), mas nao possui cabecalho RIFF/WAVE.", (unsigned)len);
     }
@@ -145,15 +147,17 @@ static void executar_reconhecimento(void) {
         return;
     }
 
-    // 1. Aviso de inicio + tempo para visitante olhar para a camera
+    // 1. Aviso de inicio + espera responsiva para visitante se posicionar
     definir_fase(FACIAL_FASE_POSICIONANDO);
-    ESP_LOGI(TAG, "[AUDIO LOCAL] Iniciando reconhecimento facial, olhe para a camera...");
-    vTaskDelay(pdMS_TO_TICKS(FACIAL_ATRASO_POSICAO_MS));
+    ESP_LOGI(TAG, "[AUDIO LOCAL] Iniciando reconhecimento facial...");
+    audio_falar_facial_inicio();
 
-    // Se o usuario comecou a digitar senha ou abriu a porta nesse meio tempo, aborta
-    if (fechadura_fsm_obter_estado() != ESTADO_RECONHECIMENTO_FACIAL) {
-        ESP_LOGI(TAG, "Ciclo facial cancelado por outra acao na fechadura.");
-        return;
+    for (int decorrido = 0; decorrido < FACIAL_ATRASO_POSICAO_MS; decorrido += 100) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        if (fechadura_fsm_obter_estado() != ESTADO_RECONHECIMENTO_FACIAL) {
+            ESP_LOGI(TAG, "Ciclo facial cancelado por outra acao na fechadura.");
+            return;
+        }
     }
 
     // 2. Captura snapshot JPEG direto da PSRAM do Olho Magico
@@ -167,7 +171,7 @@ static void executar_reconhecimento(void) {
 
     definir_fase(FACIAL_FASE_ENVIANDO);
     ESP_LOGI(TAG, "Frame capturado (%u bytes). Enviando para %s ...", (unsigned)jpeg_len, API_FACIAL_URL);
-    ESP_LOGI(TAG, "[AUDIO LOCAL] Imagem enviada com sucesso, aguarde...");
+    audio_falar_facial_processando();
 
     // 3. Monta envelope multipart/form-data com campo "imagem" (igual ao FastAPI)
     const char *part_head =

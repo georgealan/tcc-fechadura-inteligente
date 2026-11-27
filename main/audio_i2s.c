@@ -15,6 +15,8 @@ static const char *TAG = "AUDIO_I2S";
 #define AUDIO_CHUNK_FRAMES      256
 #define AUDIO_PI                3.14159265358979323846f
 #define AUDIO_VOLUME_INICIAL    50
+// Troque para 0 antes da apresentacao no SENAI
+#define SILENCIAR_ALARME_BANCADA 1
 
 typedef enum {
     AUDIO_CMD_EFEITO = 0,
@@ -300,6 +302,10 @@ void audio_i2s_definir_volume(uint8_t volume_pct) {
 }
 
 void audio_i2s_tocar(audio_efeito_t efeito) {
+    #if SILENCIAR_ALARME_BANCADA
+        if (efeito == AUDIO_SOM_ALARME) return; // confira o nome exato do enum no seu audio_i2s.h
+    #endif
+
     if (s_audio_queue == NULL) return;
     audio_cmd_t cmd = {
         .tipo = AUDIO_CMD_EFEITO,
